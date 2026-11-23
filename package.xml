@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package format="1">
+  <name>Tornillos, Tuercas, Agujeros y Roscas</name>
+  <description>Tres herramientas paramétricas independientes para Part Design.</description>
+  <version>1.0.0</version>
+  <maintainer>HelixSpline contributors</maintainer>
+  <license file="LICENSE">MIT</license>
+  <icon>pd_thread_tools/agujeros-y-roscas.png</icon>
+  <freecadmin>1.1.3</freecadmin>
+  <content>
+    <!-- El cargador de FreeCAD 1.1 ejecuta InitGui.py para esta entrada. -->
+    <workbench>
+      <name>Tornillos, Tuercas, Agujeros y Roscas</name>
+      <subdirectory>.</subdirectory>
+    </workbench>
+    <other>
+      <name>Tornillos, Tuercas, Agujeros y Roscas</name>
+      <subdirectory>.</subdirectory>
+    </other>
+  </content>
+</package>
