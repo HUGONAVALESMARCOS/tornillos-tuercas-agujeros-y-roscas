@@ -1,0 +1,114 @@
+import sys
+import traceback
+from pathlib import Path
+
+import FreeCAD as App
+import FreeCADGui as Gui
+from PySide import QtCore, QtWidgets
+
+out = Path(App.ConfigGet('UserParameter')).with_suffix('.result')
+
+
+def check():
+    try:
+        from pd_thread_tools.integration import install
+        from pd_thread_tools.remove_material_visual import update_hole_position
+
+        assert 'helixspline_gui' not in sys.modules
+        addon = install()
+        Gui.activateWorkbench('PartDesignWorkbench')
+        window = Gui.getMainWindow()
+        tasks = window.findChild(QtWidgets.QDockWidget, 'Tasks')
+        tasks.setFloating(True)
+        tasks.show()
+        tasks.raise_()
+
+        def click(role, empty_hole=False):
+            if empty_hole and role == QtWidgets.QDialogButtonBox.Ok:
+                button = tasks.findChild(QtWidgets.QPushButton, 'ConfirmEmptyThreadedHole')
+                assert button is not None
+            else:
+                button = next(box.button(role) for box in tasks.findChildren(QtWidgets.QDialogButtonBox)
+                              if box.isVisibleTo(tasks) and box.button(role))
+            assert button.isEnabled(), role
+            button.click()
+            Gui.updateGui()
+
+        for case, (index, name, with_solid) in enumerate((
+            (0, 'Tornillo', False), (1, 'Tuerca', False),
+            (2, 'Agujeros y Roscas', False), (2, 'Agujeros y Roscas', True),
+        )):
+            doc = App.newDocument('ThreadToolsTest' + str(case))
+            body = doc.addObject('PartDesign::Body', 'Body')
+            if with_solid:
+                block = body.newObject('PartDesign::AdditiveBox', 'Block')
+                block.Length = block.Width = block.Height = 20
+            doc.recompute()
+            Gui.activeDocument().activeView().setActiveObject('pdbody', body)
+            Gui.Selection.clearSelection()
+            Gui.updateGui()
+            addon.refresh()
+            assert addon.panel and addon.panel.isVisibleTo(tasks), 'Accesos en Tareas ausentes'
+            assert not doc.findObjects('Sketcher::SketchObject')
+            assert bool(body.Shape.Solids) == with_solid
+            if with_solid:
+                addon.actions[index].trigger()
+            else:
+                addon.panel.findChildren(QtWidgets.QToolButton)[index].click()
+            Gui.updateGui()
+            addon.refresh()
+            assert Gui.Control.activeDialog(), name
+            empty_hole = index == 2 and not with_solid
+            if with_solid:
+                hole = doc.findObjects('PartDesign::Hole')[0]
+                hole.PosicionAgujero = App.Placement(App.Vector(10, 10, 20), App.Rotation())
+                update_hole_position(hole)
+                doc.recompute()
+            click(QtWidgets.QDialogButtonBox.Ok, empty_hole)
+            assert not Gui.Control.activeDialog(), (name, 'Confirmar')
+            obj = next(obj for obj in body.Group if obj.Label == name)
+            if empty_hole:
+                assert obj.Suppressed and not body.Shape.Solids and 'Invalid' not in obj.State, obj.State
+            else:
+                assert obj.Shape.Solids and obj.Shape.isValid(), name
+                if with_solid:
+                    assert 0 < obj.Shape.Volume < block.Shape.Volume
+            assert Gui.activeDocument().setEdit(obj.Name), (name, 'Reeditar')
+            Gui.updateGui()
+            addon.refresh()
+            click(QtWidgets.QDialogButtonBox.Cancel)
+            assert not Gui.Control.activeDialog(), (name, 'Cancelar reedición')
+            assert doc.getObject(obj.Name) is not None
+            if empty_hole:
+                # Leave material around the bore so the cut is measurable.
+                obj.PosicionAgujero = App.Placement(App.Vector(0, 0, 8), App.Rotation())
+                update_hole_position(obj)
+                addon.refresh()
+                addon.actions[0].trigger()
+                Gui.updateGui()
+                click(QtWidgets.QDialogButtonBox.Ok)
+                assert not Gui.Control.activeDialog(), 'Tornillo después de Agujero'
+                assert obj.BaseFeature and not obj.Suppressed and 'Invalid' not in obj.State
+                assert 0 < body.Shape.Volume < obj.BaseFeature.Shape.Volume
+                addon.refresh()
+                addon.actions[1].trigger()
+                Gui.updateGui()
+                position = next(group for group in tasks.findChildren(QtWidgets.QGroupBox)
+                                if group.title() == 'Posición de la tuerca' and group.isVisibleTo(tasks))
+                position.findChildren(QtWidgets.QDoubleSpinBox)[2].setValue(15)
+                click(QtWidgets.QDialogButtonBox.Ok)
+                assert not Gui.Control.activeDialog(), 'Tuerca después de Tornillo'
+                nut = next(item for item in body.Group if item.Label == 'Tuerca')
+                assert nut.Shape.Solids and nut.Placement.Base.z == 15
+                assert 0 < body.Shape.Volume < obj.BaseFeature.Shape.Volume
+            with out.open('a', encoding='utf-8') as stream:
+                print(name + (' (con sólido)' if with_solid else ' (Cuerpo vacío)') + ' OK', file=stream)
+            App.closeDocument(doc.Name)
+    except Exception:
+        with out.open('a', encoding='utf-8') as stream:
+            traceback.print_exc(file=stream)
+    finally:
+        out.with_suffix('.done').touch()
+
+
+QtCore.QTimer.singleShot(800, check)
