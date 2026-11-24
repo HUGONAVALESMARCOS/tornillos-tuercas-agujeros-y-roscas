@@ -7,7 +7,61 @@ import Part
 
 
 def enabled(hole):
-    return getattr(hole, 'ModelarRoscaManual', False) and hole.ThreadType == 'None'
+    return getattr(hole, 'ModelarRoscaManual', False)
+
+
+def scoped(hole):
+    from .independent_pocket import CUT_SCOPES, cut_scope
+
+    return cut_scope(hole) != CUT_SCOPES[0]
+
+
+def needs_result(hole):
+    return enabled(hole) or scoped(hole)
+
+
+def add_scope_properties(hole):
+    from .independent_pocket import CUT_SCOPES
+
+    if 'CutScope' not in hole.PropertiesList:
+        hole.addProperty('App::PropertyEnumeration', 'CutScope', '2. Alcance del corte',
+                         'Operaciones del Cuerpo a las que se aplica el agujero.')
+        hole.CutScope = list(CUT_SCOPES)
+    if 'CutOperations' not in hole.PropertiesList:
+        hole.addProperty('App::PropertyLinkList', 'CutOperations', '2. Alcance del corte',
+                         'Operaciones aditivas del mismo Cuerpo que reciben el corte al elegir Operaciones seleccionadas.')
+
+
+def apply_scope(hole, shape):
+    from .independent_pocket import body_material_steps, cut_applies, is_additive_operation
+
+    base = hole.BaseFeature
+    body = hole.getParentGeoFeatureGroup()
+    if base is None or body is None:
+        return shape
+    operations = [(item, added) for item, added, _ in body_material_steps(base)
+                  if is_additive_operation(item)]
+    order = {item.Name: item.ID for item in body.Group}
+    if not any(cut_applies(hole, item, order) for item, _ in operations):
+        return base.Shape
+    for operation, material in operations:
+        if not cut_applies(hole, operation, order) and material.Solids:
+            # Restore only material still present before this hole.
+            protected = material.common(base.Shape)
+            if protected.Solids:
+                shape = shape.fuse(protected)
+    return shape.removeSplitter()
+
+
+def prepare_native_bore(hole):
+    if not enabled(hole) or hole.ThreadType == 'None':
+        return False
+    changed = not hole.Threaded or hole.ModelThread
+    if not hole.Threaded:
+        hole.Threaded = True
+    if hole.ModelThread:
+        hole.ModelThread = False
+    return changed
 
 
 def internal_thread_groove(radius, pitch, length, left):
@@ -58,6 +112,8 @@ class Result:
         shape = hole.Shape
         if enabled(hole):
             shape = shape.cut(cutter(hole, True)).removeSplitter()
+        if scoped(hole):
+            shape = apply_scope(hole, shape)
         if not shape.Solids or not shape.isValid():
             raise ValueError('La rosca manual no deja un sólido válido.')
         obj.Shape = shape

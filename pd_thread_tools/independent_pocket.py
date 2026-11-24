@@ -387,6 +387,8 @@ def sync_deferred_holes(body):
 
 
 def keep_independent_material(body, steps, cuts):
+    from . import manual_hole_thread
+
     holes = [item for item in steps if is_deferred_hole(item)]
     steps = [item for item in steps if item not in holes
              and not getattr(item, 'ManualHoleResult', False)]
@@ -409,8 +411,15 @@ def keep_independent_material(body, steps, cuts):
     cuts = [item for item in ordered if item in cuts]
     document = body.Document
     result = results[0] if results else None
-    tip_matches = (body.Tip == holes[-1] or getattr(body.Tip, 'ManualHoleSource', None) == holes[-1]
-                   if holes else body.Tip == result)
+    if holes:
+        last_hole = holes[-1]
+        thread_result = manual_hole_thread.result_for(last_hole)
+        expected_tip = thread_result if manual_hole_thread.needs_result(last_hole) else last_hole
+        tip_matches = body.Tip == expected_tip and all(
+            not manual_hole_thread.needs_result(hole) or manual_hole_thread.result_for(hole) is not None
+            for hole in holes)
+    else:
+        tip_matches = body.Tip == result
     if (result is not None and tip_matches and result.MaterialOperations == operations
             and result.BodyCuts == cuts and all(item.BaseFeature is None for item in steps)):
         if not holes or (holes[0].BaseFeature == result and not holes[0].Suppressed):
@@ -434,7 +443,6 @@ def keep_independent_material(body, steps, cuts):
     body.Tip = result
     document.recompute()
     if holes:
-        from . import manual_hole_thread
         if len(result.Shape.Solids) > 1:
             body.AllowCompound = True
         base = result
@@ -444,9 +452,10 @@ def keep_independent_material(body, steps, cuts):
             hole.DeferredThreadedHole = True
             hole.BaseFeature = base
             hole.Suppressed = False
+            manual_hole_thread.prepare_native_bore(hole)
             hole.recompute()
             base = hole
-            if manual_hole_thread.enabled(hole) and hole.Shape.Solids:
+            if manual_hole_thread.needs_result(hole) and hole.Shape.Solids:
                 base = manual_hole_thread.ensure_result(hole)
                 base.recompute()
         body.Tip = base

@@ -24,6 +24,7 @@ from . import independent_pocket
 
 
 from . import manual_hole_thread
+from . import standard_hole_preview
 
 
 from .add_material_visual import PlacementFields, edited_feature, task_widget
@@ -114,7 +115,9 @@ def hole_position_controls(parent, hole):
     return fields
 
 
-def manual_thread_controls(parent, hole, preview):
+def manual_thread_controls(parent, hole, preview, native_panel):
+    from .add_hole import thread_pitch
+
     for kind, name, default in (
         ('Bool', 'ModelarRoscaManual', False),
         ('Length', 'PasoRoscaManual', 1.0),
@@ -128,16 +131,18 @@ def manual_thread_controls(parent, hole, preview):
     box.setObjectName('ManualHoleThreadControls')
     form = QtWidgets.QFormLayout(box)
     model = QtWidgets.QCheckBox('Modelar rosca')
-    model.setChecked(hole.ModelarRoscaManual)
+    model.setChecked(manual_hole_thread.enabled(hole) or hole.ModelThread)
     form.addRow(model)
+    fields = {}
     for label, name in (('Paso', 'PasoRoscaManual'), ('Longitud roscada', 'LongitudRoscaManual')):
         spin = QtWidgets.QDoubleSpinBox()
-        spin.setDecimals(3)
+        spin.setDecimals(4 if name == 'PasoRoscaManual' else 3)
         spin.setRange(0.001, 1000)
         spin.setSuffix(' mm')
         spin.setValue(getattr(hole, name).Value)
         spin.valueChanged.connect(lambda value, prop=name: setattr(hole, prop, value))
         form.addRow(label, spin)
+        fields[name] = spin
     direction = QtWidgets.QComboBox()
     direction.addItems(['Mano derecha', 'Mano izquierda'])
     direction.setCurrentIndex(int(hole.RoscaManualIzquierda))
@@ -146,44 +151,89 @@ def manual_thread_controls(parent, hole, preview):
     status = QtWidgets.QLabel()
     status.setWordWrap(True)
     form.addRow(status)
-    model.toggled.connect(lambda checked: setattr(hole, 'ModelarRoscaManual', checked))
+    native_type = native_panel.findChild(QtWidgets.QComboBox, 'HoleType')
+    native_controls = [native_panel.findChild(QtWidgets.QWidget, name) for name in (
+        'labelThreading', 'labelHoleType', 'HoleType', 'labelThreadClearance',
+        'ThreadFit', 'ClearanceWidget', 'ThreadGroupBox')]
+
+    def apply_thread_mode(checked):
+        hole.ModelarRoscaManual = checked
+        if hole.ThreadType != 'None' and native_type is not None:
+            native_type.setCurrentIndex(int(checked))
+        manual_hole_thread.prepare_native_bore(hole)
+
+    model.toggled.connect(apply_thread_mode)
     view = Gui.activeDocument().activeView()
     graph = view.getSceneGraph()
     overlay = coin.SoSeparator()
     graph.addChild(overlay)
     options = preview.findChildren(QtWidgets.QCheckBox) if preview is not None else []
     signature = None
+    catalog_selection = (hole.ThreadType, hole.ThreadSize)
+
+    def suggest_pitch():
+        try:
+            pitch = thread_pitch(hole.ThreadType, hole.ThreadSize, hole.PasoRoscaManual.Value)
+        except (KeyError, ValueError, IndexError):
+            return
+        fields['PasoRoscaManual'].setValue(pitch)
+
+    if hole.ThreadType != 'None' and not hole.ModelarRoscaManual:
+        suggest_pitch()
 
     def redraw():
-        nonlocal signature
+        nonlocal signature, catalog_selection
         if not isValid(box) or edited_feature() != hole:
             return
         manual = hole.ThreadType == 'None'
-        box.setVisible(manual and box.property('ThreadSectionExpanded') is not False)
+        box.setVisible(box.property('ThreadSectionExpanded') is not False)
+        selection = (hole.ThreadType, hole.ThreadSize)
+        if selection != catalog_selection:
+            catalog_selection = selection
+            suggest_pitch()
+            apply_thread_mode(model.isChecked())
+        for control in native_controls:
+            if control is not None and isValid(control):
+                control.hide()
+        custom_thread = manual_hole_thread.enabled(hole)
+        if manual_hole_thread.prepare_native_bore(hole) and hole.BaseFeature is not None:
+            hole.recompute()
+        base = hole.BaseFeature
+        empty_body = base is None or not base.Shape.Solids
         key = (manual, str(hole.PosicionAgujero), hole.Reversed, hole.Diameter.Value,
                hole.Depth.Value, hole.DepthType, hole.ModelarRoscaManual, hole.PasoRoscaManual.Value,
                hole.LongitudRoscaManual.Value, hole.RoscaManualIzquierda, shape_key(hole.AddSubShape),
+               empty_body, tuple(str(getattr(hole, name)) for name in standard_hole_preview.PARAMETERS),
                tuple(option.isChecked() for option in options if isValid(option)))
         if key == signature:
             return
         signature = key
         overlay.removeAllChildren()
         status.clear()
-        if manual and (len(options) < 2 or not isValid(options[1]) or options[1].isChecked()):
+        if (manual or empty_body or custom_thread) and (
+                len(options) < 2 or not isValid(options[1]) or options[1].isChecked()):
             try:
-                plain = hole.AddSubShape
-                if plain.isNull() or not plain.Solids:
-                    plain = manual_hole_thread.cutter(hole, False)
-                shapes = [plain]
-                if hole.ModelarRoscaManual:
+                shapes = []
+                if empty_body or manual:
+                    plain = hole.AddSubShape if not empty_body else Part.Shape()
+                    if plain.isNull() or not plain.Solids:
+                        plain = (manual_hole_thread.cutter(hole, False) if manual
+                                 else standard_hole_preview.cutter(hole))
+                    shapes.append(plain)
+                if custom_thread:
                     shapes.append(manual_hole_thread.cutter(hole, True))
                 placement = hole.getParentGeoFeatureGroup().getGlobalPlacement().toMatrix()
-                for shape in shapes:
+                for shape_index, shape in enumerate(shapes):
                     shape = shape.copy()
                     shape.transformShape(placement, True)
                     node = shape_scene_node(shape, (1.0, 0.1, 0.1), 0.73,
                                             edge_style=((1.0, 0.0, 0.0), 1.0))
                     if node is not None:
+                        if custom_thread and shape_index == len(shapes) - 1:
+                            depth = coin.SoDepthBuffer()
+                            depth.test = False
+                            depth.write = False
+                            node.insertChild(depth, 0)
                         overlay.addChild(node)
             except (ValueError, RuntimeError, Part.OCCError) as error:
                 status.setText(str(error))
@@ -192,6 +242,11 @@ def manual_thread_controls(parent, hole, preview):
     timer = QtCore.QTimer(box)
     timer.timeout.connect(redraw)
     timer.start(200)
+    for name in ('ThreadType', 'ThreadSize'):
+        selector = native_panel.findChild(QtWidgets.QComboBox, name)
+        if selector is not None:
+            selector.currentIndexChanged.connect(lambda: timer.start(0))
+    timer.timeout.connect(lambda: timer.setInterval(200) if timer.interval() == 0 else None)
     box.destroyed.connect(lambda: graph.removeChild(overlay) if graph.findChild(overlay) >= 0 else None)
     return box
 
@@ -258,6 +313,7 @@ class ThreadedHoleEditor:
             feature.EditorAgujero = 'Independiente'
             feature.addProperty('App::PropertyPlacement', HOLE_POSITION, '1. Posición',
                                 'Centro de la entrada del agujero, relativo al Cuerpo.')
+            manual_hole_thread.add_scope_properties(feature)
             if not Gui.getDocument(document.Name).setEdit(feature.Name):
                 raise RuntimeError('FreeCAD no pudo abrir Agujero roscado.')
         except (ValueError, RuntimeError, Part.OCCError) as error:
@@ -322,7 +378,7 @@ class ThreadedHoleEditor:
                         label.hide()
         position = hole_position_controls(panel, feature)
         layout.insertWidget(layout.indexOf(first), position)
-        thread = manual_thread_controls(panel, feature, preview)
+        thread = manual_thread_controls(panel, feature, preview, first)
         layout.insertWidget(layout.indexOf(first) + 1, thread)
         position.show()
         anchor.setProperty('ThreadedHoleEditorInstalled', True)
@@ -350,6 +406,7 @@ class ThreadedHoleEditor:
         def finish():
             document = feature.Document
             update_hole_position(feature)
+            manual_hole_thread.prepare_native_bore(feature)
             # Keep the native parameters editable while there is no material to cut.
             if 'DeferredThreadedHole' not in feature.PropertiesList:
                 feature.addProperty('App::PropertyBool', 'DeferredThreadedHole', '', '', 4)
@@ -384,6 +441,8 @@ class ThreadedHoleEditor:
         if doc is not None:
             if not Gui.Control.activeDialog():
                 holes = [hole for hole in doc.findObjects('PartDesign::Hole') if uses_standalone_editor(hole)]
+                for hole in holes:
+                    manual_hole_thread.add_scope_properties(hole)
                 for body in {hole.getParentGeoFeatureGroup() for hole in holes
                              if independent_pocket.is_deferred_hole(hole)} - {None}:
                     independent_pocket.sync_deferred_holes(body)
@@ -391,7 +450,9 @@ class ThreadedHoleEditor:
                 for hole in holes:
                     changed = update_hole_position(hole) or changed
                     body = hole.getParentGeoFeatureGroup()
-                    if body is not None and manual_hole_thread.enabled(hole) and hole.Shape.Solids:
+                    if manual_hole_thread.prepare_native_bore(hole):
+                        doc.recompute()
+                    if body is not None and manual_hole_thread.needs_result(hole) and hole.Shape.Solids:
                         existing = manual_hole_thread.result_for(hole)
                         result = manual_hole_thread.ensure_result(hole)
                         changed = changed or existing is None
