@@ -8,6 +8,14 @@ Complemento para FreeCAD 1.1.3. Añade tres accesos a la barra y al panel **Tare
 
 Los accesos y las operaciones nuevas se llaman **Tornillo**, **Tuerca** y **Agujeros y Roscas**. Si el documento tiene un único **Cuerpo**, las herramientas lo usan directamente. Si hay varios, activa o selecciona uno en el árbol. El croquis de referencia del agujero se genera internamente a partir del origen del Cuerpo.
 
+## Tutorial TTAR
+
+- [Tornillo](docs/tutorial-tornillo.md)
+- [Tuerca](docs/tutorial-tuerca.md)
+- [Agujeros y Roscas](docs/tutorial-agujeros-y-roscas.md)
+
+En **Agujeros y Roscas → Datos → 2. Alcance del corte**, puedes aplicar el corte a todo el Cuerpo o limitarlo a operaciones anteriores, posteriores o seleccionadas. La guía muestra la diferencia con dos Pads.
+
 ## Instalación manual
 
 1. Cierra FreeCAD.

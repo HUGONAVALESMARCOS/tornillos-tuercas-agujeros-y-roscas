@@ -2,7 +2,7 @@
 <package format="1">
   <name>Tornillos, Tuercas, Agujeros y Roscas</name>
   <description>Tres herramientas paramétricas independientes para Part Design.</description>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <maintainer>HelixSpline contributors</maintainer>
   <license file="LICENSE">MIT</license>
   <icon>pd_thread_tools/agujeros-y-roscas.png</icon>
